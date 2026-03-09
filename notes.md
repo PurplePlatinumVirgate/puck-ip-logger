@@ -71,6 +71,8 @@ Netcode callbacks can fire concurrently, so shared state needs protection.
 
 ## Building
 
+Clone the repository or grab [release version source code](https://github.com/PurplePlatinumVirgate/puck-ip-logger/releases)
+
 Target is .NET Framework 4.8. Game DLLs go in `libs/` (gitignored). The `.csproj` references everything in that folder except `System.*.dll`:
 
 ```xml

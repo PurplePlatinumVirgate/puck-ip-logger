@@ -2,7 +2,7 @@
 
 A [Puck](https://store.steampowered.com/app/2994020/Puck/) server mod that logs every connection attempt with IP address, Steam ID, enabled mods, and decision - and optionally blocks connections by IP.
 
-> **Status:** Early testing. Will be on the Steam Workshop eventually; for now grab it from [GitHub releases](https://github.com/PurplePlatinumVirgate/puck-ip-logger/releases).
+> **Status:** Early testing. Will be on the Steam Workshop eventually; for now grab it from [GitHub releases](https://github.com/PurplePlatinumVirgate/puck-ip-logger/releases) or [build it from source](/notes.md#building).
 
 - [IP Logger](#ip-logger)
   - [What It Does](#what-it-does)
