@@ -15,6 +15,8 @@ NetworkEndpoint endpoint = transport.GetEndpoint(clientId);
 // endpoint.ToString() gives you "ip:port"
 ```
 
+[Unity Documentation: GetEndpoint(ulong)](https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@2.10/api/Unity.Netcode.Transports.UTP.UnityTransport.html#Unity_Netcode_Transports_UTP_UnityTransport_GetEndpoint_System_UInt64_)
+
 ---
 
 ## The Harmony Patch
