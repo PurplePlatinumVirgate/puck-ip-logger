@@ -295,6 +295,17 @@ These lists are broad. Some legitimate players may use VPNs for privacy, or conn
 
 ---
 
+## Limitations
+
+**Shared IPs** - Multiple players can share the same IP address. This is common with households, LAN events, corporate networks, and university campuses. Keep this in mind before blocking an IP - you may be blocking more than one person. 
+
+**IP is not identity** - IP addresses identify a network endpoint, not a person. They can change (DHCP, mobile networks) and can be shared (NAT, VPNs). Use IP blocking as one tool among several, not as a sole source of truth.
+
+**Steam ID is client-reported** - The Steam ID in the connection payload comes from the connecting client. The game's central server performs its own validation when `usePuckBannedSteamIds` is enabled, but the value logged by this mod is what the client sent. Keep this in mind when correlating Steam IDs across log entries. Historically malicious users have spoofed the Steam ID, and I haven't verified if the central Puck server uses known player websocket ID to validate (It is sent, but I don't know if it's ignored).
+
+**Log correlation** - Matching a Steam ID to an IP is most reliable when done close in time to a specific event (e.g. checking who connected just before something happened in-game). Broad statistical analysis across longer time periods should be treated as lower confidence, especially when multiple Steam IDs appear from the same IP.
+
+
 ## Troubleshooting
 
 **No log file appearing?**
