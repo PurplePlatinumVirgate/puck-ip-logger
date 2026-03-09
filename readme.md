@@ -4,6 +4,34 @@ A [Puck](https://store.steampowered.com/app/2994020/Puck/) server mod that logs 
 
 > **Status:** Early testing. Will be on the Steam Workshop eventually; for now grab it from [GitHub releases](https://github.com/PurplePlatinumVirgate/puck-ip-logger/releases).
 
+- [IP Logger](#ip-logger)
+  - [What It Does](#what-it-does)
+  - [Installation](#installation)
+  - [Log File](#log-file)
+    - [Example: Approved Connection](#example-approved-connection)
+    - [Example: Rejected by Game (Missing Mods)](#example-rejected-by-game-missing-mods)
+    - [Example: Blocked by IP Ban](#example-blocked-by-ip-ban)
+    - [Example: Blocked by CIDR Range](#example-blocked-by-cidr-range)
+    - [Fields](#fields)
+    - [Working With the Log](#working-with-the-log)
+    - [Console Output](#console-output)
+  - [Ban List](#ban-list)
+    - [Configuration Format](#configuration-format)
+    - [Rule Types](#rule-types)
+    - [Include Files](#include-files)
+    - [Hot Reload](#hot-reload)
+    - [Allowlist](#allowlist)
+  - [Blocking VPNs and Datacenters](#blocking-vpns-and-datacenters)
+    - [Why Block VPNs?](#why-block-vpns)
+    - [Setup](#setup)
+    - [Keep Lists Updated](#keep-lists-updated)
+    - [Performance](#performance)
+    - [Configure ip\_logger to Use Them](#configure-ip_logger-to-use-them)
+    - [A Note on False Positives](#a-note-on-false-positives)
+  - [Limitations](#limitations)
+  - [Troubleshooting](#troubleshooting)
+
+
 ---
 
 ## What It Does

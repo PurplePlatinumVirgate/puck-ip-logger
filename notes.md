@@ -1,5 +1,13 @@
 # Notes
 
+- [Notes](#notes)
+  - [Getting the Client IP](#getting-the-client-ip)
+  - [The Harmony Patch](#the-harmony-patch)
+  - [Ban List](#ban-list)
+  - [Thread Safety](#thread-safety)
+  - [Building](#building)
+
+
 ## Getting the Client IP
 
  Unity Netcode gives us a client network ID, not an IP address. The `ConnectionApprovalRequest` has the ID and a payload, but nothing about where the connection came from.
