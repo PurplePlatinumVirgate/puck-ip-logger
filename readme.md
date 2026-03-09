@@ -10,7 +10,7 @@ A [Puck](https://store.steampowered.com/app/2994020/Puck/) server mod that logs 
 
 Every time a player connects to your server, ip_logger:
 
-1. Resolves their IP address from the network transport layer
+1. Resolves their IP address from the unity transport layer
 2. Checks the IP against your ban list (if configured)
 3. Logs the result - approved, rejected, or blocked - to a structured log file
 
