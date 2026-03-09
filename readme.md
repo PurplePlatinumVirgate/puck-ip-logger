@@ -20,7 +20,7 @@ All of this happens transparently. If you don't configure a ban list, the mod si
 
 ## Installation
 
-Place the mod DLL in your Puck server's mod directory. The mod will create its log file automatically on first connection.
+Place the mod DLL in your Puck server's Plugin directory. The mod will create its log file automatically on first connection.
 
 ---
 
