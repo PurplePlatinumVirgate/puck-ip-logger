@@ -305,6 +305,7 @@ These lists are broad. Some legitimate players may use VPNs for privacy, or conn
 
 **Log correlation** - Matching a Steam ID to an IP is most reliable when done close in time to a specific event (e.g. checking who connected just before something happened in-game). Broad statistical analysis across longer time periods should be treated as lower confidence, especially when multiple Steam IDs appear from the same IP.
 
+---
 
 ## Troubleshooting
 
