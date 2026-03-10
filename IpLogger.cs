@@ -4,6 +4,7 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Threading;
 using HarmonyLib;
 using Newtonsoft.Json;
@@ -691,6 +692,11 @@ namespace IpLogger
             }
         }
 
+        static readonly string ModVersion =
+            typeof(IpLoggerMod).Assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+                ?.InformationalVersion ?? "unknown";
+
         public bool OnEnable()
         {
             try
@@ -713,6 +719,7 @@ namespace IpLogger
                     ) { AutoFlush = true };
                 }
 
+                UnityEngine.Debug.Log("[ip_logger] Enabled v" + ModVersion);
                 return true;
             }
             catch (Exception e)
@@ -741,6 +748,7 @@ namespace IpLogger
                     ConnectionApprovalPatch._logWriter?.Dispose();
                     ConnectionApprovalPatch._logWriter = null;
                 }
+                UnityEngine.Debug.Log("[ip_logger] Disabled v" + ModVersion);
                 return true;
             }
             catch (Exception e)
