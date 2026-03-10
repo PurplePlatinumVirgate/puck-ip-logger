@@ -21,6 +21,7 @@ A [Puck](https://store.steampowered.com/app/2994020/Puck/) server mod that logs 
     - [Include Files](#include-files)
     - [Hot Reload](#hot-reload)
     - [Allowlist](#allowlist)
+    - [Disabling File Logging](#disabling-file-logging)
   - [Blocking VPNs and Datacenters](#blocking-vpns-and-datacenters)
     - [Why Block VPNs?](#why-block-vpns)
     - [Setup](#setup)
@@ -157,14 +158,15 @@ To block connections by IP, create a file called `ip_logger.banned_ip.json` in t
     "198.51.100.0/24",
     "10.0.*.*"
   ],
-  "include_files": [
+  "blocklist_include_files": [
     "extra_bans.txt",
     "vpn_ipv4.txt"
   ],
   "allowlist": [
     "203.0.113.99"
   ],
-  "allowlist_include_files": []
+  "allowlist_include_files": [],
+  "enable_file_logging": true
 }
 ```
 
@@ -193,7 +195,7 @@ To block connections by IP, create a file called `ip_logger.banned_ip.json` in t
 
 ### Include Files
 
-The `include_files` array lets you reference external text files. Paths are relative to the game's base directory (or absolute). Each file contains one rule per line. Blank lines and lines starting with `#` are ignored.
+The `blocklist_include_files` array lets you reference external text files. Paths are relative to the game's base directory (or absolute). Each file contains one rule per line. Blank lines and lines starting with `#` are ignored.
 
 Example `extra_bans.txt`:
 
@@ -219,7 +221,7 @@ The allowlist supports the same rule types as the blocklist (exact IP, CIDR, wil
 ```json
 {
   "blocklist": [],
-  "include_files": [
+  "blocklist_include_files": [
     "ip_lists/vpn_ipv4.txt",
     "ip_lists/datacenter_ipv4.txt"
   ],
@@ -234,6 +236,24 @@ The allowlist supports the same rule types as the blocklist (exact IP, CIDR, wil
 ```
 
 In this example, all VPN and datacenter IPs are blocked except for `203.0.113.99`, the `198.51.100.0/28` subnet, and any IPs listed in `trusted_ips.txt`.
+
+---
+
+### Disabling File Logging
+
+If you only want the console output and don't need the NDJSON log files, set `enable_file_logging` to `false`:
+
+```json
+{
+  "blocklist": [],
+  "blocklist_include_files": [],
+  "allowlist": [],
+  "allowlist_include_files": [],
+  "enable_file_logging": false
+}
+```
+
+Connection events will still appear in the Unity server console via `Debug.Log`, but no log file will be created. This setting is hot-reloaded along with the rest of the config - you can toggle it without restarting the server. Defaults to `true` if omitted.
 
 ---
 
@@ -284,7 +304,7 @@ Add the downloaded files to your ban list config:
 ```json
 {
   "blocklist": [],
-  "include_files": [
+  "blocklist_include_files": [
     "ip_lists/vpn_ipv4.txt",
     "ip_lists/datacenter_ipv4.txt"
   ],
@@ -301,7 +321,7 @@ You can combine these with your own manual bans and allowlist exceptions:
     "203.0.113.45",
     "198.51.100.0/24"
   ],
-  "include_files": [
+  "blocklist_include_files": [
     "ip_lists/vpn_ipv4.txt",
     "ip_lists/datacenter_ipv4.txt",
     "manual_bans.txt"

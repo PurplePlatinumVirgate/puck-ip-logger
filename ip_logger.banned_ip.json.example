@@ -1,6 +1,7 @@
 {
   "blocklist": [],
-  "include_files": [],
+  "blocklist_include_files": [],
   "allowlist": [],
-  "allowlist_include_files": []
+  "allowlist_include_files": [],
+  "enable_file_logging": true
 }

@@ -50,13 +50,15 @@ namespace IpLogger
 
             internal static StreamWriter _logWriter;
             static volatile bool _logWriterWarned = false;
+            internal static volatile bool _fileLoggingEnabled = true;
 
-            sealed class BanListConfig
+            internal sealed class BanListConfig
             {
                 public List<string> blocklist = new List<string>();
-                public List<string> include_files = new List<string>();
+                public List<string> blocklist_include_files = new List<string>();
                 public List<string> allowlist = new List<string>();
                 public List<string> allowlist_include_files = new List<string>();
+                public bool enable_file_logging = true;
             }
 
             public class ConnectionState
@@ -278,7 +280,7 @@ namespace IpLogger
                     foreach (var entry in config.blocklist)
                         AddRuleEntry(entry, newBlockedIps, newBlockedCidrs, newBlockedWildcards);
 
-                    foreach (var include in config.include_files)
+                    foreach (var include in config.blocklist_include_files)
                     {
                         string path = ResolveConfigRelativePath(include);
                         if (path == null)
@@ -312,6 +314,34 @@ namespace IpLogger
                     _allowedWildcards = newAllowedWildcards;
                     _includeFiles = newIncludeFiles;
                     _includeFileWriteTimesUtc = newTimes;
+
+                    bool wasEnabled = _fileLoggingEnabled;
+                    _fileLoggingEnabled = config.enable_file_logging;
+
+                    if (wasEnabled && !_fileLoggingEnabled)
+                    {
+                        lock (FileLock)
+                        {
+                            _logWriter?.Flush();
+                            _logWriter?.Dispose();
+                            _logWriter = null;
+                        }
+                        UnityEngine.Debug.Log("[ip_logger] File logging disabled via config");
+                    }
+                    else if (!wasEnabled && _fileLoggingEnabled)
+                    {
+                        lock (FileLock)
+                        {
+                            if (_logWriter == null && LogPath != null)
+                            {
+                                _logWriter = new StreamWriter(LogPath, true, Encoding.UTF8)
+                                    { AutoFlush = true };
+                                _logWriterWarned = false;
+                            }
+                        }
+                        UnityEngine.Debug.Log("[ip_logger] File logging enabled via config");
+                    }
+
                     Interlocked.Exchange(ref _banListLastWriteUtcTicks, currentWrite.Ticks);
                     _banListLoaded = true;
                 }
@@ -330,7 +360,7 @@ namespace IpLogger
                 times[path] = write;
             }
 
-            private static BanListConfig LoadBanListConfig(string path)
+            internal static BanListConfig LoadBanListConfig(string path)
             {
                 try
                 {
@@ -574,6 +604,9 @@ namespace IpLogger
                 string blockMatch
             )
             {
+                if (!_fileLoggingEnabled)
+                    return;
+
                 JObject obj = new JObject
                 {
                     ["ts_unix_ms"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
@@ -703,20 +736,35 @@ namespace IpLogger
             {
                 harmony.PatchAll();
 
-                string logFileName = string.Format(
-                    "ip_logger_{0}_{1}.ndjson",
-                    DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss"),
-                    Process.GetCurrentProcess().Id
+                string configPath = Path.Combine(
+                    ConnectionApprovalPatch.BaseDir, "ip_logger.banned_ip.json"
                 );
+                var startupConfig = File.Exists(configPath)
+                    ? ConnectionApprovalPatch.LoadBanListConfig(configPath)
+                    : new ConnectionApprovalPatch.BanListConfig();
+                ConnectionApprovalPatch._fileLoggingEnabled = startupConfig.enable_file_logging;
 
-                lock (ConnectionApprovalPatch.FileLock)
+                if (ConnectionApprovalPatch._fileLoggingEnabled)
                 {
-                    ConnectionApprovalPatch.LogPath = Path.Combine(
-                        ConnectionApprovalPatch.BaseDir, logFileName
+                    string logFileName = string.Format(
+                        "ip_logger_{0}_{1}.ndjson",
+                        DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss"),
+                        Process.GetCurrentProcess().Id
                     );
-                    ConnectionApprovalPatch._logWriter = new StreamWriter(
-                        ConnectionApprovalPatch.LogPath, true, Encoding.UTF8
-                    ) { AutoFlush = true };
+
+                    lock (ConnectionApprovalPatch.FileLock)
+                    {
+                        ConnectionApprovalPatch.LogPath = Path.Combine(
+                            ConnectionApprovalPatch.BaseDir, logFileName
+                        );
+                        ConnectionApprovalPatch._logWriter = new StreamWriter(
+                            ConnectionApprovalPatch.LogPath, true, Encoding.UTF8
+                        ) { AutoFlush = true };
+                    }
+                }
+                else
+                {
+                    UnityEngine.Debug.Log("[ip_logger] File logging disabled via config");
                 }
 
                 UnityEngine.Debug.Log("[ip_logger] Enabled v" + ModVersion);
