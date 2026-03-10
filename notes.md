@@ -41,7 +41,7 @@ The **postfix** always runs, even when the prefix returns `false`. It checks a `
 
 ## Ban List
 
-The config file (`ip_logger.banned_ip.json`) has four fields: `blocklist`, `include_files`, `allowlist`, and `allowlist_include_files`. Include files are plain text, one rule per line, `#` for comments.
+The config file (`ip_logger.banned_ip.json`) has four fields: `blocklist`, `blocklist_include_files`, `allowlist`, and `allowlist_include_files`. Include files are plain text, one rule per line, `#` for comments.
 
 Three rule types are supported:
 
