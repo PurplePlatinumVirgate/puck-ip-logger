@@ -30,6 +30,7 @@ A [Puck](https://store.steampowered.com/app/2994020/Puck/) server mod that logs 
     - [A Note on False Positives](#a-note-on-false-positives)
   - [Limitations](#limitations)
   - [Troubleshooting](#troubleshooting)
+  - [License and Re-use (Public Domain)](#license-and-re-use-public-domain)
 
 
 ---
@@ -353,3 +354,9 @@ Check the server console for `[ip_logger]` warnings. Common issues include malfo
 
 **Player blocked but shouldn't be?**
 Check the `block_match` field in the log to see which rule matched. If you're using VPN/datacenter lists, the player's IP may be in one of those ranges - see the false positives section above.
+
+## License and Re-use (Public Domain)
+
+The code in this repository is released under the Unlicense license. Practically speaking, you can use or re-use it in portions or its entirety with no restrictions. More details in [LICENSE](/LICENSE)
+
+If you want to package it completely or in parts into your own mod, please do.
