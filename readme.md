@@ -336,7 +336,7 @@ These lists are broad. Some legitimate players may use VPNs for privacy, or conn
 
 **Log correlation** - Matching a Steam ID to an IP is most reliable when done close in time to a specific event (e.g. checking who connected just before something happened in-game). Broad statistical analysis across longer time periods should be treated as lower confidence, especially when multiple Steam IDs appear from the same IP.
 
-**Log file growth** - The log file grows indefinitely. The mod holds the file handle open for the lifetime of the server process, so `logrotate` with `copytruncate` won't work correctly - the writer will keep appending at its old file offset, producing a corrupted file. To rotate the log, stop the server, move or archive `ip_logger.ndjson`, and start the server again. The mod will create a fresh file on the next connection.
+**Log file growth** - Each server session creates its own log file. Old log files are never cleaned up automatically. On a busy server you may want to periodically archive or delete old files. Since each session writes to its own file, you can safely remove any log file that isn't from the currently running server.
 
 
 ---
