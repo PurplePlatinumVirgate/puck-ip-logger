@@ -101,23 +101,23 @@ All connection events are written to `ip_logger.ndjson` in the game's base direc
 The NDJSON format (one JSON object per line) works well with standard command-line tools:
 
 ```bash
-# Tail the log in real time
-tail -f ip_logger.ndjson
+# Tail the latest log in real time
+tail -f ip_logger_*.ndjson
 
-# Find all blocked connections
-grep '"BLOCKED"' ip_logger.ndjson
+# Find all blocked connections across all sessions
+grep '"BLOCKED"' ip_logger_*.ndjson
 
 # Find all connections from a specific IP
-grep '"203.0.113.45"' ip_logger.ndjson
+grep '"203.0.113.45"' ip_logger_*.ndjson
 
 # Find all connections from a specific Steam ID
-grep '"76561198001353738"' ip_logger.ndjson
+grep '"76561198001353738"' ip_logger_*.ndjson
 
 # Count connections per decision type
-jq -r '.decision' ip_logger.ndjson | sort | uniq -c
+jq -r '.decision' ip_logger_*.ndjson | sort | uniq -c
 
 # List all unique IPs that connected today
-grep "$(date -u +%Y-%m-%d)" ip_logger.ndjson | jq -r '.ip' | sort -u
+grep "$(date -u +%Y-%m-%d)" ip_logger_*.ndjson | jq -r '.ip' | sort -u
 ```
 
 ### Console Output
@@ -344,7 +344,7 @@ These lists are broad. Some legitimate players may use VPNs for privacy, or conn
 ## Troubleshooting
 
 **No log file appearing?**
-The log file is created on the first connection attempt. If no one has connected yet, the file won't exist. Check the Unity log (Player.log or the server console) for `[ip_logger]` error messages.
+The log file is created when the mod is enabled at server startup. Look for a file matching `ip_logger_*.ndjson` in the game's base directory. If it doesn't exist, check the Unity log (Player.log or the server console) for `[ip_logger]` error messages.
 
 **IPs showing as `null`?**
 This can happen if the network transport isn't a `UnityTransport` instance, or if the client disconnects before the approval callback runs. The connection will still be logged with whatever information was available.

@@ -26,7 +26,7 @@ namespace IpLogger
             static readonly object BanListLock = new object();
 
             internal static readonly string BaseDir = AppDomain.CurrentDomain.BaseDirectory;
-            internal static readonly string LogPath = Path.Combine(BaseDir, "ip_logger.ndjson");
+            internal static string LogPath;
             static readonly string BanListPath = Path.Combine(BaseDir, "ip_logger.banned_ip.json");
 
             static long _banListLastWriteUtcTicks = DateTime.MinValue.Ticks;
@@ -697,8 +697,17 @@ namespace IpLogger
             {
                 harmony.PatchAll();
 
+                string logFileName = string.Format(
+                    "ip_logger_{0}_{1}.ndjson",
+                    DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss"),
+                    Process.GetCurrentProcess().Id
+                );
+
                 lock (ConnectionApprovalPatch.FileLock)
                 {
+                    ConnectionApprovalPatch.LogPath = Path.Combine(
+                        ConnectionApprovalPatch.BaseDir, logFileName
+                    );
                     ConnectionApprovalPatch._logWriter = new StreamWriter(
                         ConnectionApprovalPatch.LogPath, true, Encoding.UTF8
                     ) { AutoFlush = true };
