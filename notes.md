@@ -31,7 +31,7 @@ NetworkEndpoint endpoint = transport.GetEndpoint(clientId);
 
 The mod patches `ServerManager.Server_ConnectionApproval` with a prefix and a postfix.
 
-The **prefix** runs first. It resolves the IP, pulls the Steam ID and mod list out of the connection payload, and checks the IP against the ban list. If the IP is blocked, it sets `response.Approved = false`, logs the event, and returns `false` to skip the game's own approval logic. Otherwise it returns `true` and lets the game handle it normally.
+The **prefix** runs first. It resolves the IP, pulls the Steam ID and mod list out of the connection payload, and checks the IP against the ban list. If the IP is blocked, it sets `response.Approved = false`, logs the event, and returns `false` to skip the game's own approval logic. This avoids an unnecessary websocket conversation to puck central to validate user's steamid. Otherwise it returns `true` and lets the game handle it normally.
 
 The **postfix** always runs, even when the prefix returns `false`. It checks a `ConnectionState` object (passed through Harmony's `__state`) to see if the prefix already handled things. If not, it reads the game's final decision from `response.Approved`, maps the rejection code to a human-readable name via `ConnectionRejectionCode.ToString()`, and logs it.
 
@@ -92,3 +92,170 @@ dotnet build
 ```
 
 For general Puck modding setup, see the [Puck Modding Guide](https://puck.gitbook.io/modding/getting-started/using-the-puck-api).
+
+## Flow Diagram
+```mermaid
+flowchart TD
+    Start([Client connects]) --> HostCheck{ClientNetworkId == 0?}
+    HostCheck -- Yes --> SkipToOriginal[Skip prefix, run original method]
+    HostCheck -- No --> ResolvIP[Resolve IP via GetEndpoint]
+
+    ResolvIP --> DeserPayload[Deserialize connection payload]
+    DeserPayload --> ExtractData[Extract Steam ID + mod list]
+    ExtractData --> PopState[Populate ConnectionState]
+
+    PopState --> CooldownCheck{Ban list reload needed?}
+    CooldownCheck -- "No (< 5s since last check)" --> AllowCheck
+    CooldownCheck -- Yes --> StatFiles[Stat config + include files]
+    StatFiles --> FilesChanged{Files changed?}
+    FilesChanged -- No --> AllowCheck
+    FilesChanged -- Yes --> Reload[Rebuild all rules from disk]
+    Reload --> AllowCheck
+
+    AllowCheck{IP on allowlist?}
+    AllowCheck -- Yes --> NotBlocked[IP is not blocked]
+    AllowCheck -- No --> BlockCheck
+
+    BlockCheck{IP on blocklist?}
+    BlockCheck -- "Exact IP match" --> Blocked
+    BlockCheck -- "CIDR match" --> Blocked
+    BlockCheck -- "Wildcard match" --> Blocked
+    BlockCheck -- No match --> NotBlocked
+
+    Blocked[IP is blocked] --> DenyResponse["Set response.Approved = false"]
+    DenyResponse --> LogBlocked[Log BLOCKED to console + NDJSON]
+    LogBlocked --> FireEvent[Fire Event_Server_ConnectionApproval]
+    FireEvent --> PrefixReturnFalse["Prefix returns false\n(skip original method)"]
+    PrefixReturnFalse --> PostfixBlocked[Postfix runs]
+    PostfixBlocked --> StateCheck{__state.Blocked?}
+    StateCheck -- Yes --> Done([Connection rejected])
+
+    NotBlocked --> PrefixReturnTrue["Prefix returns true"]
+    PrefixReturnTrue --> OriginalMethod
+
+    OriginalMethod["Original Server_ConnectionApproval runs:\n- Password check\n- Steam ID validation\n- Server full check\n- Mod check\n- Steam ban check\n- Puck central server check"]
+
+    OriginalMethod --> PostfixNormal[Postfix runs]
+    PostfixNormal --> StateCheck2{__state.Blocked?}
+    StateCheck2 -- No --> ReadResponse{response.Approved?}
+
+    ReadResponse -- Yes --> LogApproved[Log APPROVED to console + NDJSON]
+    ReadResponse -- No --> LogRejected["Log REJECTED + reason to console + NDJSON"]
+
+    LogApproved --> Connected([Player connects])
+    LogRejected --> Rejected([Connection rejected by game])
+
+    style Start fill:#2A3A6E,color:#fff
+    style Done fill:#B85042,color:#fff
+    style Connected fill:#00A882,color:#fff
+    style Rejected fill:#B85042,color:#fff
+    style Blocked fill:#FF5C5C,color:#fff
+    style NotBlocked fill:#4ADE80,color:#000
+    style AllowCheck fill:#4ADE80,color:#000
+    style BlockCheck fill:#FF5C5C,color:#fff
+    style OriginalMethod fill:#2A3A6E,color:#fff
+```
+
+## Call Graph
+
+```mermaid
+flowchart TD
+    subgraph "Mod Lifecycle"
+        OnEnable["OnEnable()"]
+        OnDisable["OnDisable()"]
+    end
+
+    subgraph "Harmony Patch"
+        Prefix["Prefix()"]
+        Postfix["Postfix()"]
+    end
+
+    subgraph "IP Resolution"
+        GetClientEndpointString["GetClientEndpointString()"]
+        ExtractIp["ExtractIp()"]
+    end
+
+    subgraph "Connection Data"
+        TryDeserializeConnectionData["TryDeserializeConnectionData()"]
+        ExtractEnabledModIds["ExtractEnabledModIds()"]
+    end
+
+    subgraph "Ban List Loading"
+        EnsureBanListLoaded["EnsureBanListLoaded()"]
+        HaveAnyIncludeFilesChanged["HaveAnyIncludeFilesChanged()"]
+        ReloadBanListInternal["ReloadBanListInternal()"]
+        LoadBanListConfig["LoadBanListConfig()"]
+        LoadRuleEntriesFromFile["LoadRuleEntriesFromFile()"]
+        AddRuleEntry["AddRuleEntry()"]
+        ResolveConfigRelativePath["ResolveConfigRelativePath()"]
+        TrackFileTimestamp["TrackFileTimestamp()"]
+    end
+
+    subgraph "IP Matching"
+        GetBlockReason["GetBlockReason()"]
+        IsAllowed["IsAllowed()"]
+        TryParseIpv4["TryParseIpv4()"]
+        UInt32ToIpv4["UInt32ToIpv4()"]
+        NormalizeIp["NormalizeIp()"]
+        TryParseCidr["TryParseCidr()"]
+        PrefixLengthToMask["PrefixLengthToMask()"]
+    end
+
+    subgraph "Logging & Response"
+        WriteNdjsonEvent["WriteNdjsonEvent()"]
+        ExtractReasonCode["ExtractReasonCode()"]
+        BuildBannedReasonJson["BuildBannedReasonJson()"]
+        TriggerConnectionApprovalEvent["TriggerConnectionApprovalEvent()"]
+        ValueOrUnknown["ValueOrUnknown()"]
+    end
+
+    Prefix --> EnsureBanListLoaded
+    Prefix --> TryDeserializeConnectionData
+    Prefix --> GetClientEndpointString
+    Prefix --> ExtractIp
+    Prefix --> ExtractEnabledModIds
+    Prefix --> GetBlockReason
+    Prefix --> BuildBannedReasonJson
+    Prefix --> WriteNdjsonEvent
+    Prefix --> TriggerConnectionApprovalEvent
+    Prefix --> ValueOrUnknown
+
+    Postfix --> ExtractReasonCode
+    Postfix --> WriteNdjsonEvent
+    Postfix --> ValueOrUnknown
+
+    EnsureBanListLoaded --> HaveAnyIncludeFilesChanged
+    EnsureBanListLoaded --> ReloadBanListInternal
+
+    ReloadBanListInternal --> LoadBanListConfig
+    ReloadBanListInternal --> AddRuleEntry
+    ReloadBanListInternal --> ResolveConfigRelativePath
+    ReloadBanListInternal --> TrackFileTimestamp
+    ReloadBanListInternal --> LoadRuleEntriesFromFile
+
+    LoadRuleEntriesFromFile --> AddRuleEntry
+
+    AddRuleEntry --> TryParseCidr
+    AddRuleEntry --> NormalizeIp
+
+    NormalizeIp --> TryParseIpv4
+    NormalizeIp --> UInt32ToIpv4
+
+    TryParseCidr --> TryParseIpv4
+    TryParseCidr --> PrefixLengthToMask
+
+    GetBlockReason --> TryParseIpv4
+    GetBlockReason --> UInt32ToIpv4
+    GetBlockReason --> IsAllowed
+
+    IsAllowed -.-> _allowedIps["_allowedIps HashSet"]
+    IsAllowed -.-> _allowedCidrs["_allowedCidrs List"]
+    IsAllowed -.-> _allowedWildcards["_allowedWildcards List"]
+
+    style OnEnable fill:#2A3A6E,color:#fff
+    style OnDisable fill:#2A3A6E,color:#fff
+    style Prefix fill:#00A882,color:#fff
+    style Postfix fill:#00A882,color:#fff
+    style GetBlockReason fill:#B85042,color:#fff
+    style IsAllowed fill:#4ADE80,color:#000
+```
