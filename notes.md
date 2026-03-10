@@ -47,7 +47,7 @@ Three rule types are supported:
 
 - **Exact IP** - stored in a `HashSet<string>` 
 - **CIDR** - parsed to a network/mask `uint32` pair, matched with `(ip & mask) == network`
-- **Wildcard** - converted to a compiled `Regex` at load time so there's no per-connection compilation
+- **Wildcard** - converted to a compiled `Regex` at load time
 
 All IPs are parsed to `uint32` internally. In `GetBlockReason`, the IP is parsed once and reused: the `uint32` goes straight into CIDR bitwise checks, and the normalized string form is used for HashSet lookups and wildcard matching.
 
