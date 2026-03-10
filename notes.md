@@ -6,6 +6,8 @@
   - [Ban List](#ban-list)
   - [Thread Safety](#thread-safety)
   - [Building](#building)
+  - [Flow Diagram](#flow-diagram)
+  - [Call Graph](#call-graph)
 
 
 ## Getting the Client IP
