@@ -4,6 +4,7 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Threading;
 using HarmonyLib;
 using Newtonsoft.Json;
@@ -26,7 +27,7 @@ namespace IpLogger
             static readonly object BanListLock = new object();
 
             internal static readonly string BaseDir = AppDomain.CurrentDomain.BaseDirectory;
-            internal static readonly string LogPath = Path.Combine(BaseDir, "ip_logger.ndjson");
+            internal static string LogPath;
             static readonly string BanListPath = Path.Combine(BaseDir, "ip_logger.banned_ip.json");
 
             static long _banListLastWriteUtcTicks = DateTime.MinValue.Ticks;
@@ -691,19 +692,34 @@ namespace IpLogger
             }
         }
 
+        static readonly string ModVersion =
+            typeof(IpLoggerMod).Assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+                ?.InformationalVersion ?? "unknown";
+
         public bool OnEnable()
         {
             try
             {
                 harmony.PatchAll();
 
+                string logFileName = string.Format(
+                    "ip_logger_{0}_{1}.ndjson",
+                    DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss"),
+                    Process.GetCurrentProcess().Id
+                );
+
                 lock (ConnectionApprovalPatch.FileLock)
                 {
+                    ConnectionApprovalPatch.LogPath = Path.Combine(
+                        ConnectionApprovalPatch.BaseDir, logFileName
+                    );
                     ConnectionApprovalPatch._logWriter = new StreamWriter(
                         ConnectionApprovalPatch.LogPath, true, Encoding.UTF8
                     ) { AutoFlush = true };
                 }
 
+                UnityEngine.Debug.Log("[ip_logger] Enabled v" + ModVersion);
                 return true;
             }
             catch (Exception e)
@@ -732,6 +748,7 @@ namespace IpLogger
                     ConnectionApprovalPatch._logWriter?.Dispose();
                     ConnectionApprovalPatch._logWriter = null;
                 }
+                UnityEngine.Debug.Log("[ip_logger] Disabled v" + ModVersion);
                 return true;
             }
             catch (Exception e)
