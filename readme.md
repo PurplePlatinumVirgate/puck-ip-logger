@@ -42,7 +42,9 @@ Every time a player connects to your server, ip_logger:
 2. Checks the IP against your ban list (if configured)
 3. Logs the result - approved, rejected, or blocked - to a structured log file
 
-All of this happens transparently. If you don't configure a ban list, the mod simply logs connections without interfering.
+All of this happens transparently. If you don't configure a ban list, the mod simply logs connections without interfering. 
+
+If you need more technical details check [notes.md](/notes.md)
 
 ---
 
