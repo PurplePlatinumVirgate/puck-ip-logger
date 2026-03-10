@@ -274,7 +274,7 @@ crontab -e
 
 ### Performance
 
-The VPN and datacenter lists are large (10,000+ CIDR ranges combined), but the matching is fast. Each CIDR check is a single bitwise AND and compare on a 32-bit integer, so scanning the entire list takes microseconds. Connection approval already involves JSON deserialization, network I/O, and Steam validation, all of which are orders of magnitude slower. The lists are parsed once at load time and only reloaded when the files change. Players won't notice any difference.
+The VPN and datacenter lists are large (10,000+ CIDR ranges combined), but the matching is fast. Each CIDR check is a single bitwise AND and compare on a 32-bit integer, so scanning the entire list takes microseconds. Connection approval already involves JSON deserialization, network I/O, and puck central websocket validation, all of which are orders of magnitude slower. The lists are parsed once at load time and only reloaded when the files change. Players won't notice any difference.
 
 ### Configure ip_logger to Use Them
 
