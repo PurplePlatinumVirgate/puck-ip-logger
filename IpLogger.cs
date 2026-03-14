@@ -67,7 +67,15 @@ namespace IpLogger
                 public string SteamId;
                 public string[] Mods;
                 public bool Blocked;
+                // Set when the vanilla method defers approval (Pending=true).
+                // Carried to the WebSocket response patch for final logging and auth enforcement.
+                public NetworkManager.ConnectionApprovalResponse PendingResponse;
             }
+
+            // Keyed by steamId. Holds connection state for approvals that are still pending
+            // the WebSocket auth response, so the WebSocket patch can log the final outcome.
+            internal static readonly Dictionary<string, ConnectionState> _pendingStates
+                = new Dictionary<string, ConnectionState>();
 
             private class CidrRange
             {
@@ -153,6 +161,19 @@ namespace IpLogger
             {
                 if (__state == null || __state.Blocked)
                     return;
+
+                // Approval is deferred - waiting on the WebSocket auth response.
+                // Store state so the WebSocket patch can log the final outcome.
+                if (response.Pending)
+                {
+                    if (!string.IsNullOrEmpty(__state.SteamId))
+                    {
+                        __state.PendingResponse = response;
+                        lock (_pendingStates)
+                            _pendingStates[__state.SteamId] = __state;
+                    }
+                    return;
+                }
 
                 string decision = response.Approved ? "APPROVED" : "REJECTED";
 
@@ -719,9 +740,197 @@ namespace IpLogger
                 }
             }
 
+            internal static string ExtractReasonCodePublic(string reasonJson) => ExtractReasonCode(reasonJson);
+            internal static string ValueOrUnknownPublic(string value) => ValueOrUnknown(value);
+
             private static string ValueOrUnknown(string value)
             {
                 return string.IsNullOrEmpty(value) ? "<missing>" : value;
+            }
+        }
+
+        // Patches ServerManagerController.WebSocket_Event_OnServerConnectionApprovalResponse.
+        //
+        // The vanilla implementation ignores success/error from the auth server and only
+        // checks server capacity - a "Player not found" (success=false) response still
+        // results in the player being approved. This patch enforces rejection on auth failure
+        // and logs the final connection outcome (deferred from the Server_ConnectionApproval
+        // postfix above which cannot log while Pending=true).
+        [HarmonyPatch]
+        public class WebSocketConnectionApprovalResponsePatch
+        {
+            static MethodBase TargetMethod()
+            {
+                return typeof(ServerManagerController).GetMethod(
+                    "WebSocket_Event_OnServerConnectionApprovalResponse",
+                    BindingFlags.NonPublic | BindingFlags.Instance
+                );
+            }
+
+            // On auth failure: enforce rejection before vanilla runs, then skip vanilla
+            // entirely by returning false. This guarantees Unity Netcode sees our rejection
+            // before the connection is finalised - vanilla sets Approved=true then clears
+            // Pending in the same call, so a postfix-only approach loses the race.
+            // On auth success: return true and let vanilla run normally.
+            [HarmonyPrefix]
+            [HarmonyPriority(Priority.First)]
+            public static bool Prefix(
+                ServerManagerController __instance,
+                Dictionary<string, object> message
+            )
+            {
+                try
+                {
+                    var authResponse = GetAuthResponse(message);
+                    if (authResponse == null || string.IsNullOrEmpty(authResponse.steamId))
+                        return true;
+
+                    // Auth succeeded - let vanilla handle it, postfix will log.
+                    if (authResponse.success)
+                        return true;
+
+                    string steamId = authResponse.steamId;
+                    string error   = authResponse.error ?? "<no error>";
+
+                    ServerManager serverManager = GetServerManager(__instance);
+                    if (serverManager == null)
+                    {
+                        UnityEngine.Debug.LogError("[ip_logger] WebSocket prefix: could not retrieve ServerManager for steamId=" + steamId);
+                        return true;
+                    }
+
+                    if (!serverManager.ConnectionApprovalRequests.ContainsKey(steamId))
+                        return true;
+
+                    NetworkManager.ConnectionApprovalResponse approvalResponse =
+                        serverManager.ConnectionApprovalRequests[steamId];
+
+                    // Enforce rejection before vanilla can approve.
+                    approvalResponse.Approved = false;
+                    approvalResponse.Pending  = false;
+                    approvalResponse.Reason   = BuildRejectionJson(serverManager);
+
+                    serverManager.ConnectionApprovalRequests.Remove(steamId);
+
+                    UnityEngine.Debug.LogWarning(
+                        "[ip_logger] Auth server rejected steamId=" + steamId +
+                        " error=\"" + error + "\" - enforcing rejection."
+                    );
+
+                    // Update the pending state's response reference so the postfix can log.
+                    lock (ConnectionApprovalPatch._pendingStates)
+                    {
+                        if (ConnectionApprovalPatch._pendingStates.TryGetValue(steamId, out var state))
+                            state.PendingResponse = approvalResponse;
+                    }
+
+                    // Skip vanilla - rejection is already finalised.
+                    return false;
+                }
+                catch (Exception ex)
+                {
+                    UnityEngine.Debug.LogError("[ip_logger] WebSocket prefix error: " + ex.Message);
+                    return true;
+                }
+            }
+
+            [HarmonyPostfix]
+            [HarmonyPriority(Priority.First)]
+            public static void Postfix(
+                ServerManagerController __instance,
+                Dictionary<string, object> message
+            )
+            {
+                try
+                {
+                    var authResponse = GetAuthResponse(message);
+                    if (authResponse == null || string.IsNullOrEmpty(authResponse.steamId))
+                        return;
+
+                    string steamId = authResponse.steamId;
+
+                    ConnectionApprovalPatch.ConnectionState state;
+                    lock (ConnectionApprovalPatch._pendingStates)
+                    {
+                        if (!ConnectionApprovalPatch._pendingStates.TryGetValue(steamId, out state))
+                            return;
+                        ConnectionApprovalPatch._pendingStates.Remove(steamId);
+                    }
+
+                    // PendingResponse is set by the prefix (auth failure) or carried from
+                    // Server_ConnectionApproval postfix (auth success, vanilla ran normally).
+                    // If vanilla ran (success path), grab the response from state which was
+                    // populated by the Server_ConnectionApproval postfix.
+                    var response = state.PendingResponse;
+                    if (response == null)
+                        return;
+
+                    string decision  = response.Approved ? "APPROVED" : "REJECTED";
+                    string reasonCode = ConnectionApprovalPatch.ExtractReasonCodePublic(response.Reason);
+                    if (string.IsNullOrEmpty(reasonCode))
+                        reasonCode = "<none>";
+                    if (!authResponse.success)
+                        reasonCode += "_LikelySpoofAttempt";
+
+                    UnityEngine.Debug.Log(
+                        "[ip_logger] " + decision +
+                        " ip=" + ConnectionApprovalPatch.ValueOrUnknownPublic(state.Ip) +
+                        " steam=" + ConnectionApprovalPatch.ValueOrUnknownPublic(state.SteamId) +
+                        " mods=" + string.Join(",", state.Mods) +
+                        " reason=" + reasonCode
+                    );
+
+                    ConnectionApprovalPatch.WriteNdjsonEvent(
+                        decision,
+                        state.Ip,
+                        state.SteamId,
+                        state.Mods,
+                        reasonCode,
+                        null
+                    );
+                }
+                catch (Exception ex)
+                {
+                    UnityEngine.Debug.LogError("[ip_logger] WebSocket postfix error: " + ex.Message);
+                }
+            }
+
+            private static ServerConnectionApprovalResponse GetAuthResponse(Dictionary<string, object> message)
+            {
+                try
+                {
+                    var socketResponse = (SocketIOClient.SocketIOResponse)message["response"];
+                    return socketResponse.GetValue<ServerConnectionApprovalResponse>(0);
+                }
+                catch
+                {
+                    return null;
+                }
+            }
+
+            static FieldInfo _serverManagerField;
+
+            private static ServerManager GetServerManager(ServerManagerController controller)
+            {
+                try
+                {
+                    if (_serverManagerField == null)
+                        _serverManagerField = typeof(ServerManagerController).GetField(
+                            "serverManager", BindingFlags.NonPublic | BindingFlags.Instance);
+                    return _serverManagerField?.GetValue(controller) as ServerManager;
+                }
+                catch { return null; }
+            }
+
+            private static string BuildRejectionJson(ServerManager serverManager)
+            {
+                ulong[] mods = serverManager?.ServerConfigurationManager?.ClientRequiredModIds
+                               ?? new ulong[0];
+                return JsonConvert.SerializeObject(new
+                {
+                    code = (int)ConnectionRejectionCode.InvalidSteamId,
+                    clientRequiredModIds = mods
+                });
             }
         }
 
