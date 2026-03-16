@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Collections.Generic;
@@ -67,6 +68,12 @@ namespace IpLogger
                 public string SteamId;
                 public string[] Mods;
                 public bool Blocked;
+                // True when the connection was initiated by an admin while the server
+                // was full. The WebSocket success path must skip the capacity check.
+                public bool AdminBypass;
+                // The Netcode client ID, stored so the WebSocket handler can fire
+                // Event_Server_ConnectionApproval with the correct ID on admin bypass.
+                public ulong ClientNetworkId;
                 // Set when the vanilla method defers approval (Pending=true).
                 // Carried to the WebSocket response patch for final logging and auth enforcement.
                 public NetworkManager.ConnectionApprovalResponse PendingResponse;
@@ -115,7 +122,8 @@ namespace IpLogger
                     Ip = ip,
                     SteamId = steamId,
                     Mods = mods,
-                    Blocked = false
+                    Blocked = false,
+                    ClientNetworkId = request.ClientNetworkId
                 };
 
                 string blockReason = GetBlockReason(ip);
@@ -148,6 +156,75 @@ namespace IpLogger
                     TriggerConnectionApprovalEvent(request.ClientNetworkId, false);
 
                     return false;
+                }
+
+                // --- Admin bypass: allow admins to connect when the server is full ---
+                // We only take over when the server IS full. If it's not full, vanilla
+                // handles everything normally and the WebSocket auth still runs via the
+                // standard path.
+                //
+                // The claimed SteamId is UNVERIFIED at this point. We never approve here;
+                // we just send the WebSocket auth request so the auth server validates
+                // the SteamId. The actual approval happens in the WebSocket response
+                // handler, which checks AdminBypass on the pending state.
+                if (IsDedicatedServer()
+                    && connectionData != null
+                    && !string.IsNullOrEmpty(steamId)
+                    && !string.IsNullOrEmpty(connectionData.SocketId)
+                    && ServerManager.Instance != null
+                    && ServerManager.Instance.AdminSteamIds != null
+                    && ServerManager.Instance.AdminSteamIds.Contains(steamId))
+                {
+                    bool serverFull = NetworkManager.Singleton.ConnectedClientsList.Count
+                                      >= __instance.Server.MaxPlayers;
+
+                    if (serverFull)
+                    {
+                        // Admins must still have required mods - reject immediately if not.
+                        bool isModsMissing = __instance.ServerConfigurationManager
+                            .ClientRequiredModIds
+                            .Any(modId => !connectionData.EnabledModIds.Contains(modId));
+
+                        if (isModsMissing)
+                        {
+                            // Let vanilla handle the rejection so the client gets the
+                            // proper MissingMods rejection code with the mod list.
+                            return true;
+                        }
+
+                        // Defer to WebSocket auth - do NOT approve yet.
+                        response.Pending = true;
+
+                        if (__instance.ConnectionApprovalRequests.ContainsKey(steamId))
+                            __instance.ConnectionApprovalRequests.Remove(steamId);
+                        __instance.ConnectionApprovalRequests.Add(steamId, response);
+
+                        MonoBehaviourSingleton<WebSocketManager>.Instance.Emit(
+                            "serverConnectionApprovalRequest",
+                            new Dictionary<string, object>
+                            {
+                                { "steamId", steamId },
+                                { "socketId", connectionData.SocketId }
+                            },
+                            "serverConnectionApprovalResponse"
+                        );
+
+                        __state.AdminBypass = true;
+
+                        UnityEngine.Debug.Log(
+                            "[ip_logger] Admin bypass (server full): deferring to auth for " +
+                            request.ClientNetworkId + " (" + steamId + ")"
+                        );
+
+                        // Fire the event so ServerManagerController tracks the client.
+                        // approved=false is correct here: the connection isn't approved
+                        // yet, it's pending auth. If we said approved=true the controller
+                        // would add it to approvedClients prematurely.
+                        TriggerConnectionApprovalEvent(request.ClientNetworkId, false);
+
+                        // Skip vanilla - we've set up the deferred auth ourselves.
+                        return false;
+                    }
                 }
 
                 return true;
@@ -721,7 +798,7 @@ namespace IpLogger
                 });
             }
 
-            private static void TriggerConnectionApprovalEvent(ulong clientNetworkId, bool approved)
+            internal static void TriggerConnectionApprovalEvent(ulong clientNetworkId, bool approved)
             {
                 try
                 {
@@ -747,6 +824,11 @@ namespace IpLogger
             {
                 return string.IsNullOrEmpty(value) ? "<missing>" : value;
             }
+
+            private static bool IsDedicatedServer()
+            {
+                return Application.isBatchMode;
+            }
         }
 
         // Patches ServerManagerController.WebSocket_Event_OnServerConnectionApprovalResponse.
@@ -771,7 +853,8 @@ namespace IpLogger
             // entirely by returning false. This guarantees Unity Netcode sees our rejection
             // before the connection is finalised - vanilla sets Approved=true then clears
             // Pending in the same call, so a postfix-only approach loses the race.
-            // On auth success: return true and let vanilla run normally.
+            // On auth success for admin-bypass connections: approve here (skipping vanilla's
+            // full-server check). For normal auth success: let vanilla handle it.
             [HarmonyPrefix]
             [HarmonyPriority(Priority.First)]
             public static bool Prefix(
@@ -785,12 +868,65 @@ namespace IpLogger
                     if (authResponse == null || string.IsNullOrEmpty(authResponse.steamId))
                         return true;
 
-                    // Auth succeeded - let vanilla handle it, postfix will log.
-                    if (authResponse.success)
-                        return true;
-
                     string steamId = authResponse.steamId;
-                    string error   = authResponse.error ?? "<no error>";
+
+                    if (authResponse.success)
+                    {
+                        // Auth succeeded. Check if this was an admin-bypass connection
+                        // (i.e. server was full but we deferred to auth anyway).
+                        // If so, approve here because vanilla would reject due to capacity.
+                        ConnectionApprovalPatch.ConnectionState pendingState;
+                        lock (ConnectionApprovalPatch._pendingStates)
+                        {
+                            ConnectionApprovalPatch._pendingStates.TryGetValue(
+                                steamId, out pendingState);
+                        }
+
+                        if (pendingState != null && pendingState.AdminBypass)
+                        {
+                            ServerManager sm = GetServerManager(__instance);
+                            if (sm == null)
+                            {
+                                UnityEngine.Debug.LogError(
+                                    "[ip_logger] WebSocket prefix: could not retrieve " +
+                                    "ServerManager for admin bypass steamId=" + steamId);
+                                return true;
+                            }
+
+                            if (!sm.ConnectionApprovalRequests.ContainsKey(steamId))
+                                return true;
+
+                            NetworkManager.ConnectionApprovalResponse adminResponse =
+                                sm.ConnectionApprovalRequests[steamId];
+
+                            // Auth server confirmed this SteamId is genuine. Approve.
+                            adminResponse.Approved = true;
+                            adminResponse.Pending  = false;
+
+                            sm.ConnectionApprovalRequests.Remove(steamId);
+
+                            // Update pending state so postfix can log the outcome.
+                            pendingState.PendingResponse = adminResponse;
+
+                            // Fire the approval event so the controller adds the
+                            // client to approvedClients (used for Edgegap tracking).
+                            ConnectionApprovalPatch.TriggerConnectionApprovalEvent(
+                                pendingState.ClientNetworkId, true);
+
+                            UnityEngine.Debug.Log(
+                                "[ip_logger] Admin bypass APPROVED (auth verified) for " +
+                                steamId);
+
+                            // Skip vanilla - it would reject due to server being full.
+                            return false;
+                        }
+
+                        // Normal (non-bypass) auth success: let vanilla handle it.
+                        return true;
+                    }
+
+                    // Auth failed - enforce rejection.
+                    string error = authResponse.error ?? "<no error>";
 
                     ServerManager serverManager = GetServerManager(__instance);
                     if (serverManager == null)
@@ -871,6 +1007,8 @@ namespace IpLogger
                         reasonCode = "<none>";
                     if (!authResponse.success)
                         reasonCode += "_LikelySpoofAttempt";
+                    if (state.AdminBypass)
+                        reasonCode += "_AdminBypass";
 
                     UnityEngine.Debug.Log(
                         "[ip_logger] " + decision +
