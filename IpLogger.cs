@@ -853,8 +853,8 @@ namespace IpLogger
             // entirely by returning false. This guarantees Unity Netcode sees our rejection
             // before the connection is finalised - vanilla sets Approved=true then clears
             // Pending in the same call, so a postfix-only approach loses the race.
-            // On auth success for admin-bypass connections: approve here (skipping vanilla's
-            // full-server check). For normal auth success: let vanilla handle it.
+            // On auth success: return true and let vanilla run normally. Admin bypass
+            // override (if needed) happens in the postfix, AFTER vanilla has fully run.
             [HarmonyPrefix]
             [HarmonyPriority(Priority.First)]
             public static bool Prefix(
@@ -868,65 +868,13 @@ namespace IpLogger
                     if (authResponse == null || string.IsNullOrEmpty(authResponse.steamId))
                         return true;
 
-                    string steamId = authResponse.steamId;
-
+                    // Auth succeeded - let vanilla handle it, postfix will log
+                    // (and override for admin bypass if needed).
                     if (authResponse.success)
-                    {
-                        // Auth succeeded. Check if this was an admin-bypass connection
-                        // (i.e. server was full but we deferred to auth anyway).
-                        // If so, approve here because vanilla would reject due to capacity.
-                        ConnectionApprovalPatch.ConnectionState pendingState;
-                        lock (ConnectionApprovalPatch._pendingStates)
-                        {
-                            ConnectionApprovalPatch._pendingStates.TryGetValue(
-                                steamId, out pendingState);
-                        }
-
-                        if (pendingState != null && pendingState.AdminBypass)
-                        {
-                            ServerManager sm = GetServerManager(__instance);
-                            if (sm == null)
-                            {
-                                UnityEngine.Debug.LogError(
-                                    "[ip_logger] WebSocket prefix: could not retrieve " +
-                                    "ServerManager for admin bypass steamId=" + steamId);
-                                return true;
-                            }
-
-                            if (!sm.ConnectionApprovalRequests.ContainsKey(steamId))
-                                return true;
-
-                            NetworkManager.ConnectionApprovalResponse adminResponse =
-                                sm.ConnectionApprovalRequests[steamId];
-
-                            // Auth server confirmed this SteamId is genuine. Approve.
-                            adminResponse.Approved = true;
-                            adminResponse.Pending  = false;
-
-                            sm.ConnectionApprovalRequests.Remove(steamId);
-
-                            // Update pending state so postfix can log the outcome.
-                            pendingState.PendingResponse = adminResponse;
-
-                            // Fire the approval event so the controller adds the
-                            // client to approvedClients (used for Edgegap tracking).
-                            ConnectionApprovalPatch.TriggerConnectionApprovalEvent(
-                                pendingState.ClientNetworkId, true);
-
-                            UnityEngine.Debug.Log(
-                                "[ip_logger] Admin bypass APPROVED (auth verified) for " +
-                                steamId);
-
-                            // Skip vanilla - it would reject due to server being full.
-                            return false;
-                        }
-
-                        // Normal (non-bypass) auth success: let vanilla handle it.
                         return true;
-                    }
 
-                    // Auth failed - enforce rejection.
-                    string error = authResponse.error ?? "<no error>";
+                    string steamId = authResponse.steamId;
+                    string error   = authResponse.error ?? "<no error>";
 
                     ServerManager serverManager = GetServerManager(__instance);
                     if (serverManager == null)
@@ -1000,6 +948,26 @@ namespace IpLogger
                     var response = state.PendingResponse;
                     if (response == null)
                         return;
+
+                    // --- Admin bypass override ---
+                    // At this point, BOTH the prefix auth enforcement AND vanilla have
+                    // fully run. If this was an admin-bypass connection (server was full)
+                    // and the auth server confirmed the SteamId is genuine, vanilla will
+                    // have rejected due to capacity. Override that rejection now.
+                    if (state.AdminBypass && authResponse.success && !response.Approved)
+                    {
+                        response.Approved = true;
+                        response.Reason   = null;
+
+                        // Fire the approval event so the controller tracks the client
+                        // (used for Edgegap deployment cleanup).
+                        ConnectionApprovalPatch.TriggerConnectionApprovalEvent(
+                            state.ClientNetworkId, true);
+
+                        UnityEngine.Debug.Log(
+                            "[ip_logger] Admin bypass: overriding ServerFull rejection " +
+                            "for verified admin " + steamId);
+                    }
 
                     string decision  = response.Approved ? "APPROVED" : "REJECTED";
                     string reasonCode = ConnectionApprovalPatch.ExtractReasonCodePublic(response.Reason);
@@ -1093,6 +1061,9 @@ namespace IpLogger
 
                 if (ConnectionApprovalPatch._fileLoggingEnabled)
                 {
+                    string logDir = Path.Combine(ConnectionApprovalPatch.BaseDir, "Logs");
+                    Directory.CreateDirectory(logDir);
+
                     string logFileName = string.Format(
                         "ip_logger_{0}_{1}.ndjson",
                         DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss"),
@@ -1102,7 +1073,7 @@ namespace IpLogger
                     lock (ConnectionApprovalPatch.FileLock)
                     {
                         ConnectionApprovalPatch.LogPath = Path.Combine(
-                            ConnectionApprovalPatch.BaseDir, logFileName
+                            logDir, logFileName
                         );
                         ConnectionApprovalPatch._logWriter = new StreamWriter(
                             ConnectionApprovalPatch.LogPath, true, Encoding.UTF8
