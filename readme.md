@@ -2,11 +2,13 @@
 
 A [Puck](https://store.steampowered.com/app/2994020/Puck/) server mod that logs every connection attempt with IP address, Steam ID, enabled mods, and decision — optionally blocks connections by IP — enforces the game's player identity verification — and allows admins to connect when the server is full.
 
-> **Status:** Early testing. Will be on the Steam Workshop eventually; for now grab it from [GitHub releases](https://github.com/PurplePlatinumVirgate/puck-ip-logger/releases) or [build it from source](/notes.md#building).
+> **Status:** Testing but mostly stable. Install it from the [steam workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3682703417) following the directions in [installation](#installation) section. You can also grab it from [GitHub releases](https://github.com/PurplePlatinumVirgate/puck-ip-logger/releases) or [build it from source](/notes.md#building).
 
 - [IP Logger](#ip-logger)
   - [What It Does](#what-it-does)
   - [Installation](#installation)
+    - [Steam workshop install](#steam-workshop-install)
+    - [Github releases or built from source](#github-releases-or-built-from-source)
   - [Identity Verification Enforcement](#identity-verification-enforcement)
   - [Admin Connect While Full](#admin-connect-while-full)
   - [Log File](#log-file)
@@ -59,7 +61,23 @@ If you need more technical details check [notes.md](/notes.md)
 
 ## Installation
 
-Place the mod DLL in your Puck server's Plugins directory. E.g. `Plugins/ip_logger/IpLogger.dll` The mod will create its log file automatically on first connection.
+### Steam workshop install
+
+Modify your puck server's `server_configuration.json` to include the steam workshop id number of the mod. For example:
+
+```json
+  "mods": [
+            {
+                "id": 3682703417,
+                "enabled": true,
+                "clientRequired": false
+            }
+  ]
+```
+
+### Github releases or built from source
+
+Place the `IpLogger.dll` in your Puck server's Plugins directory. E.g. `Plugins/ip_logger/IpLogger.dll` The mod will create its log file automatically on first connection.
 
 ---
 
