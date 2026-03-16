@@ -2,7 +2,10 @@
 
 - [Notes](#notes)
   - [Getting the Client IP](#getting-the-client-ip)
-  - [The Harmony Patch](#the-harmony-patch)
+  - [The Harmony Patches](#the-harmony-patches)
+    - [Server\_ConnectionApproval Patch](#server_connectionapproval-patch)
+    - [WebSocket\_Event\_OnServerConnectionApprovalResponse Patch](#websocket_event_onserverconnectionapprovalresponse-patch)
+    - [Admin Connect While Full](#admin-connect-while-full)
   - [Ban List](#ban-list)
   - [Thread Safety](#thread-safety)
   - [Building](#building)
@@ -29,13 +32,47 @@ NetworkEndpoint endpoint = transport.GetEndpoint(clientId);
 
 ---
 
-## The Harmony Patch
+## The Harmony Patches
 
-The mod patches `ServerManager.Server_ConnectionApproval` with a prefix and a postfix.
+The mod patches two game methods using Harmony prefixes and postfixes.
 
-The **prefix** runs first. It resolves the IP, pulls the Steam ID and mod list out of the connection payload, and checks the IP against the ban list. If the IP is blocked, it sets `response.Approved = false`, logs the event, and returns `false` to skip the game's own approval logic. This avoids an unnecessary websocket conversation to puck central to validate user's steamid. Otherwise it returns `true` and lets the game handle it normally.
+### Server_ConnectionApproval Patch
 
-The **postfix** always runs, even when the prefix returns `false`. It checks a `ConnectionState` object (passed through Harmony's `__state`) to see if the prefix already handled things. If not, it reads the game's final decision from `response.Approved`, maps the rejection code to a human-readable name via `ConnectionRejectionCode.ToString()`, and logs it.
+Patches `ServerManager.Server_ConnectionApproval` with a prefix and a postfix.
+
+The **prefix** runs first. It resolves the IP, pulls the Steam ID and mod list out of the connection payload, and checks the IP against the ban list. If the IP is blocked, it sets `response.Approved = false`, logs the event, and returns `false` to skip the game's own approval logic. This avoids an unnecessary websocket conversation to the central server.
+
+If the IP is not blocked, the prefix checks for the admin bypass case (see [Admin Connect While Full](#admin-connect-while-full) below). If no special handling applies, it returns `true` and lets the game handle it normally.
+
+The **postfix** always runs, even when the prefix returns `false`. It checks a `ConnectionState` object (passed through Harmony's `__state`) to see if the prefix already handled things. If the vanilla method deferred approval to the central server (`response.Pending == true`), the postfix stores the state in `_pendingStates` keyed by Steam ID so the WebSocket patch can log the final outcome. Otherwise it reads the game's final decision from `response.Approved`, maps the rejection code to a human-readable name via `ConnectionRejectionCode.ToString()`, and logs it.
+
+### WebSocket_Event_OnServerConnectionApprovalResponse Patch
+
+Patches `ServerManagerController.WebSocket_Event_OnServerConnectionApprovalResponse` with a prefix and a postfix. This is the handler that runs when the game's central server responds to an identity verification request.
+
+The **vanilla bug**: when the central server reports that a player's identity could not be verified (`success=false`), vanilla ignores this and approves the connection anyway — it only checks whether the server is full. This means a client with a forged identity will be let in as long as there's room.
+
+The **prefix** intercepts this. On auth failure, it sets `response.Approved = false` and `response.Pending = false` before vanilla can touch the response, then returns `false` to skip vanilla entirely. This is done as a prefix rather than a postfix because vanilla sets `Approved=true` then clears `Pending` in the same call — a postfix would lose the race against Unity Netcode finalising the connection.
+
+On auth success for normal connections, the prefix returns `true` to let vanilla handle it. On auth success for admin bypass connections (where `ConnectionState.AdminBypass` is set), the prefix approves the connection directly and returns `false` to skip vanilla's full-server check. See [Admin Connect While Full](#admin-connect-while-full).
+
+The **postfix** removes the connection from `_pendingStates`, reads the final decision (set either by the prefix on failure/admin-bypass or by vanilla on normal success), and logs the outcome. Connections where the central server reported failure are tagged with `_LikelySpoofAttempt` in the reason. Admin bypass connections are tagged with `_AdminBypass`.
+
+### Admin Connect While Full
+
+On dedicated servers, admins can connect when the server is full. This was integrated from Toaster's [ToasterConnectWhileFull](https://github.com/ckhawks/ToasterConnectWhileFull) mod.
+
+The original mod approved admins immediately in a `Server_ConnectionApproval` prefix by Steam ID alone — before any identity verification. This is unsafe because the Steam ID in the connection payload is self-reported by the client. Running both mods together caused the original mod to approve forged identities before this mod's verification patch could reject them.
+
+The integrated approach never approves an admin without verification:
+
+1. In the `Server_ConnectionApproval` prefix, after the IP ban check passes, if the server is full and the claimed Steam ID is in `AdminSteamIds`, the mod takes over. It validates that the socket ID and Steam ID are present, checks required mods, then manually sets `response.Pending = true`, registers the response in `ConnectionApprovalRequests`, emits the WebSocket verification request, and returns `false` to skip vanilla. The `AdminBypass` flag is set on the `ConnectionState`.
+
+2. In the `WebSocket_Event_OnServerConnectionApprovalResponse` prefix, when the central server responds with success for a connection that has `AdminBypass` set, the mod approves the connection directly — bypassing vanilla's full-server check. It also fires `Event_Server_ConnectionApproval` with `approved=true` so the game's client tracking stays consistent.
+
+3. If the central server responds with failure for an admin bypass connection, it's rejected like any other failed verification. Someone who forged an admin's Steam ID gets caught here.
+
+Admins bypass: server-full check, password check. Admins do **not** bypass: IP blocklist, required mods, identity verification.
 
 ---
 
@@ -64,6 +101,8 @@ Netcode callbacks can fire concurrently, so shared state needs protection.
 **BanListLock** covers all rule collections during reload and lookup. The reload uses double-checked locking: check the cooldown outside the lock (fast path), re-check inside to prevent redundant reloads from racing threads.
 
 **FileLock** covers the `StreamWriter` for log output.
+
+**`_pendingStates` lock** covers the dictionary of in-flight connections waiting on WebSocket verification. Both the `Server_ConnectionApproval` postfix (writing) and the WebSocket patch (reading/removing) access this under the same lock.
 
 **`volatile bool _banListLoaded`** ensures collection assignments are visible to other threads before the flag flips. It's the last assignment in the reload method for that reason.
 
@@ -132,30 +171,68 @@ flowchart TD
     PostfixBlocked --> StateCheck{__state.Blocked?}
     StateCheck -- Yes --> Done([Connection rejected])
 
-    NotBlocked --> PrefixReturnTrue["Prefix returns true"]
+    NotBlocked --> AdminCheck{Dedicated server\n+ claimed admin\n+ server full?}
+
+    AdminCheck -- Yes --> ModCheck{Required mods present?}
+    ModCheck -- No --> PrefixReturnTrue
+    ModCheck -- Yes --> AdminDefer["Set response.Pending = true\nRegister in ConnectionApprovalRequests\nEmit WebSocket verification request\nSet AdminBypass = true"]
+    AdminDefer --> AdminFireEvent["Fire Event_Server_ConnectionApproval\n(approved=false, pending)"]
+    AdminFireEvent --> AdminPrefixReturn["Prefix returns false\n(skip original method)"]
+    AdminPrefixReturn --> AdminPostfix[Postfix runs]
+    AdminPostfix --> AdminPending{response.Pending?}
+    AdminPending -- Yes --> StoreState["Store state in _pendingStates"]
+    StoreState --> WaitForWebSocket([Wait for central server response])
+
+    WaitForWebSocket --> WSResponse{Central server response}
+    WSResponse -- "success=true" --> WSAdminApprove["Set Approved=true, Pending=false\nFire Event approved=true"]
+    WSResponse -- "success=false" --> WSReject["Set Approved=false, Pending=false\nReject with InvalidSteamId"]
+    WSAdminApprove --> WSPostfixLog["Log APPROVED + _AdminBypass"]
+    WSReject --> WSRejectLog["Log REJECTED + _LikelySpoofAttempt"]
+    WSPostfixLog --> AdminConnected([Admin connects])
+    WSRejectLog --> AdminRejected([Connection rejected])
+
+    AdminCheck -- No --> PrefixReturnTrue["Prefix returns true"]
     PrefixReturnTrue --> OriginalMethod
 
-    OriginalMethod["Original Server_ConnectionApproval runs:\n- Password check\n- Steam ID validation\n- Server full check\n- Mod check\n- Steam ban check\n- Puck central server check"]
+    OriginalMethod["Original Server_ConnectionApproval runs:\n- Password check\n- Steam ID validation\n- Server full check\n- Mod check\n- Steam ban check"]
 
-    OriginalMethod --> PostfixNormal[Postfix runs]
-    PostfixNormal --> StateCheck2{__state.Blocked?}
-    StateCheck2 -- No --> ReadResponse{response.Approved?}
+    OriginalMethod --> VanillaPending{response.Pending?\nwaiting for central server}
+    VanillaPending -- No --> PostfixNormal[Postfix logs immediately]
+    VanillaPending -- Yes --> PostfixStore["Postfix stores state\nin _pendingStates"]
 
+    PostfixNormal --> ReadResponse{response.Approved?}
     ReadResponse -- Yes --> LogApproved[Log APPROVED to console + NDJSON]
     ReadResponse -- No --> LogRejected["Log REJECTED + reason to console + NDJSON"]
-
     LogApproved --> Connected([Player connects])
     LogRejected --> Rejected([Connection rejected by game])
+
+    PostfixStore --> WaitWS([Wait for central server response])
+    WaitWS --> WSNormal{Central server response}
+    WSNormal -- "success=true" --> VanillaHandles["Vanilla approves\n(if server not full)"]
+    WSNormal -- "success=false" --> WSEnforce["Mod enforces rejection\nbefore vanilla can approve"]
+    VanillaHandles --> WSPostLog["Log APPROVED or REJECTED"]
+    WSEnforce --> WSEnforceLog["Log REJECTED + _LikelySpoofAttempt"]
+    WSPostLog --> NormalDone([Final outcome])
+    WSEnforceLog --> NormalRejected([Connection rejected])
 
     style Start fill:#2A3A6E,color:#fff
     style Done fill:#B85042,color:#fff
     style Connected fill:#00A882,color:#fff
     style Rejected fill:#B85042,color:#fff
+    style AdminConnected fill:#00A882,color:#fff
+    style AdminRejected fill:#B85042,color:#fff
+    style NormalDone fill:#00A882,color:#fff
+    style NormalRejected fill:#B85042,color:#fff
     style Blocked fill:#FF5C5C,color:#fff
     style NotBlocked fill:#4ADE80,color:#000
     style AllowCheck fill:#4ADE80,color:#000
     style BlockCheck fill:#FF5C5C,color:#fff
+    style AdminCheck fill:#4A90D9,color:#fff
     style OriginalMethod fill:#2A3A6E,color:#fff
+    style AdminDefer fill:#4A90D9,color:#fff
+    style WSAdminApprove fill:#00A882,color:#fff
+    style WSReject fill:#B85042,color:#fff
+    style WSEnforce fill:#B85042,color:#fff
 ```
 
 ## Call Graph
@@ -167,9 +244,14 @@ flowchart TD
         OnDisable["OnDisable()"]
     end
 
-    subgraph "Harmony Patch"
+    subgraph "ConnectionApproval Patch"
         Prefix["Prefix()"]
         Postfix["Postfix()"]
+    end
+
+    subgraph "WebSocket Patch"
+        WSPrefix["WS Prefix()"]
+        WSPostfix["WS Postfix()"]
     end
 
     subgraph "IP Resolution"
@@ -211,6 +293,18 @@ flowchart TD
         ValueOrUnknown["ValueOrUnknown()"]
     end
 
+    subgraph "Admin Bypass"
+        IsDedicatedServer["IsDedicatedServer()"]
+        AdminSteamIds["ServerManager.AdminSteamIds"]
+        WebSocketEmit["WebSocketManager.Emit()"]
+    end
+
+    subgraph "WebSocket Helpers"
+        GetAuthResponse["GetAuthResponse()"]
+        GetServerManager["GetServerManager()"]
+        BuildRejectionJson["BuildRejectionJson()"]
+    end
+
     Prefix --> EnsureBanListLoaded
     Prefix --> TryDeserializeConnectionData
     Prefix --> GetClientEndpointString
@@ -221,10 +315,22 @@ flowchart TD
     Prefix --> WriteNdjsonEvent
     Prefix --> TriggerConnectionApprovalEvent
     Prefix --> ValueOrUnknown
+    Prefix --> IsDedicatedServer
+    Prefix -.-> AdminSteamIds
+    Prefix --> WebSocketEmit
 
     Postfix --> ExtractReasonCode
     Postfix --> WriteNdjsonEvent
     Postfix --> ValueOrUnknown
+
+    WSPrefix --> GetAuthResponse
+    WSPrefix --> GetServerManager
+    WSPrefix --> BuildRejectionJson
+    WSPrefix --> TriggerConnectionApprovalEvent
+    WSPostfix --> GetAuthResponse
+    WSPostfix --> ExtractReasonCode
+    WSPostfix --> WriteNdjsonEvent
+    WSPostfix --> ValueOrUnknown
 
     EnsureBanListLoaded --> HaveAnyIncludeFilesChanged
     EnsureBanListLoaded --> ReloadBanListInternal
@@ -258,6 +364,9 @@ flowchart TD
     style OnDisable fill:#2A3A6E,color:#fff
     style Prefix fill:#00A882,color:#fff
     style Postfix fill:#00A882,color:#fff
+    style WSPrefix fill:#4A90D9,color:#fff
+    style WSPostfix fill:#4A90D9,color:#fff
     style GetBlockReason fill:#B85042,color:#fff
     style IsAllowed fill:#4ADE80,color:#000
+    style IsDedicatedServer fill:#4A90D9,color:#fff
 ```
