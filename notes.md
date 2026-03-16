@@ -60,7 +60,7 @@ The **postfix** removes the connection from `_pendingStates`, reads the final de
 
 ### Admin Connect While Full
 
-On dedicated servers, admins can connect when the server is full. This was integrated from Toaster's [ToasterConnectWhileFull](https://github.com/nicholastotoreas/ToasterConnectWhileFull) mod.
+On dedicated servers, admins can connect when the server is full. This was integrated from Toaster's [ToasterConnectWhileFull](https://github.com/ckhawks/ToasterConnectWhileFull) mod.
 
 The original mod approved admins immediately in a `Server_ConnectionApproval` prefix by Steam ID alone — before any identity verification. This is unsafe because the Steam ID in the connection payload is self-reported by the client. Running both mods together caused the original mod to approve forged identities before this mod's verification patch could reject them.
 

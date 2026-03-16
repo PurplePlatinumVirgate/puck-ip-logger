@@ -79,7 +79,7 @@ This has been tested and confirmed to block connections using forged identities.
 
 On dedicated servers, admins (players whose Steam IDs are listed in `adminSteamIds` in your server config) can connect even when the server has reached its `maxPlayers` limit.
 
-This logic was integrated from Toaster's [Connect While Full](https://github.com/nicholastotoreas/ToasterConnectWhileFull) mod with permission, since running both mods separately caused compatibility issues — the original mod approved admin connections before this mod's identity verification could run, which meant a forged identity claiming to be an admin would be let in.
+This logic was integrated from Toaster's [Connect While Full](https://github.com/ckhawks/ToasterConnectWhileFull) mod with permission, since running both mods separately caused compatibility issues — the original mod approved admin connections before this mod's identity verification could run, which meant a forged identity claiming to be an admin would be let in.
 
 The integrated version is safe. When an admin tries to connect to a full server:
 
@@ -97,7 +97,7 @@ This feature only activates on dedicated servers (batch mode) and only when the 
 
 ## Log File
 
-All connection events are written to `ip_logger.ndjson` in the game's base directory. Each line is a self-contained JSON object, one per connection attempt.
+All connection events are written to the `Logs/` directory in the game's base directory (the same directory the game uses for its own logs). Each session creates a file like `ip_logger_2025-03-08_16-00-00_12345.ndjson`. Each line is a self-contained JSON object, one per connection attempt.
 
 ### Example: Approved Connection
 
@@ -158,28 +158,28 @@ The NDJSON format (one JSON object per line) works well with standard command-li
 
 ```bash
 # Tail the latest log in real time
-tail -f ip_logger_*.ndjson
+tail -f Logs/ip_logger_*.ndjson
 
 # Find all blocked connections across all sessions
-grep '"BLOCKED"' ip_logger_*.ndjson
+grep '"BLOCKED"' Logs/ip_logger_*.ndjson
 
 # Find all connections from a specific IP
-grep '"203.0.113.45"' ip_logger_*.ndjson
+grep '"203.0.113.45"' Logs/ip_logger_*.ndjson
 
 # Find all connections from a specific Steam ID
-grep '"76561198001353738"' ip_logger_*.ndjson
+grep '"76561198001353738"' Logs/ip_logger_*.ndjson
 
 # Find all likely spoof attempts
-grep 'LikelySpoofAttempt' ip_logger_*.ndjson
+grep 'LikelySpoofAttempt' Logs/ip_logger_*.ndjson
 
 # Find all admin bypass connections
-grep 'AdminBypass' ip_logger_*.ndjson
+grep 'AdminBypass' Logs/ip_logger_*.ndjson
 
 # Count connections per decision type
-jq -r '.decision' ip_logger_*.ndjson | sort | uniq -c
+jq -r '.decision' Logs/ip_logger_*.ndjson | sort | uniq -c
 
 # List all unique IPs that connected today
-grep "$(date -u +%Y-%m-%d)" ip_logger_*.ndjson | jq -r '.ip' | sort -u
+grep "$(date -u +%Y-%m-%d)" Logs/ip_logger_*.ndjson | jq -r '.ip' | sort -u
 ```
 
 ### Console Output
@@ -416,7 +416,7 @@ These lists are broad. Some legitimate players may use VPNs for privacy, or conn
 
 This mod uses Harmony to patch two game methods: `ServerManager.Server_ConnectionApproval` and `ServerManagerController.WebSocket_Event_OnServerConnectionApprovalResponse`. Other mods that patch either of these methods may conflict.
 
-**Toaster's Connect While Full** — this mod's admin-bypass-when-full feature was integrated from [ToasterConnectWhileFull](https://github.com/nicholastotoreas/ToasterConnectWhileFull) with permission. **Do not run both mods at the same time.** The original mod approves admin connections immediately by Steam ID without waiting for identity verification. If both mods are loaded, the original mod's patch can run first and approve a connection before this mod's identity verification has a chance to reject it. This means someone connecting with a forged admin identity would be let through, bypassing IP bans and verification. If you were using ToasterConnectWhileFull, uninstall it — this mod now covers that functionality safely.
+**Toaster's Connect While Full** — this mod's admin-bypass-when-full feature was integrated from [ToasterConnectWhileFull](https://github.com/ckhawks/ToasterConnectWhileFull) with permission. **Do not run both mods at the same time.** The original mod approves admin connections immediately by Steam ID without waiting for identity verification. If both mods are loaded, the original mod's patch can run first and approve a connection before this mod's identity verification has a chance to reject it. This means someone connecting with a forged admin identity would be let through, bypassing IP bans and verification. If you were using ToasterConnectWhileFull, uninstall it — this mod now covers that functionality safely.
 
 I searched all public Puck mods on the Steam Workshop and GitHub as of the time of writing and did not find any other mods that patch these two methods. If you encounter issues with another mod, check whether it patches `Server_ConnectionApproval` or `WebSocket_Event_OnServerConnectionApprovalResponse`.
 
@@ -440,7 +440,7 @@ I searched all public Puck mods on the Steam Workshop and GitHub as of the time 
 ## Troubleshooting
 
 **No log file appearing?**
-The log file is created when the mod is enabled at server startup. Look for a file matching `ip_logger_*.ndjson` in the game's base directory. If it doesn't exist, check the Unity log (Player.log or the server console) for `[ip_logger]` error messages.
+The log file is created when the mod is enabled at server startup. Look for a file matching `ip_logger_*.ndjson` in the `Logs/` directory under the game's base directory. If it doesn't exist, check the Unity log (Player.log or the server console) for `[ip_logger]` error messages.
 
 **IPs showing as `null`?**
 This can happen if the network transport isn't a `UnityTransport` instance, or if the client disconnects before the approval callback runs. The connection will still be logged with whatever information was available.
